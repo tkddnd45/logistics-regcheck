@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>물류창고 법규검토 — DUGA CNC (v2.3)</title>
+<title>물류창고 법규검토 — DUGA CNC (v2.4)</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -11,13 +11,13 @@
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
-const { useState } = React;
+const { useState, useEffect } = React;
 
 // 배포 버전 표시 — 새 파일을 올릴 때마다 이 값을 바꾸면, 화면과 브라우저 탭
 // 제목에서 실제로 최신 버전이 반영됐는지 바로 확인할 수 있습니다.
 // 버전 규칙: MAJOR.MINOR — MAJOR는 새 페이지/큰 기능 추가 시, MINOR는 같은
 // 페이지 내 수정·버그픽스 시 올립니다. (예: 2.0=02페이지 추가, 2.1=수정1건)
-const APP_VERSION = "v2.3 (2026-09-11)";
+const APP_VERSION = "v2.4 (2026-09-11)";
 
 /* ------------------------------------------------------------------ */
 /*  API 설정                                                           */
@@ -463,11 +463,28 @@ function Page2({ parcels, onBack }) {
     }
   }
 
+  // 02 페이지에 들어오면 각 필지의 공시지가·조례를 자동으로 순서대로 조회한다.
+  // (버튼은 실패했을 때 재조회용으로 남겨둔다.)
+  useEffect(() => {
+    let cancelled = false;
+    async function runAll() {
+      for (const p of parcels) {
+        if (cancelled) return;
+        await lookupPrice(p);
+        if (cancelled) return;
+        await lookupOrdinance(p);
+      }
+    }
+    runAll();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div>
       <div className="sheet-header">
         <h2 className="sheet-title">지번별 법규 검토</h2>
-        <p className="sheet-sub">01에서 입력한 필지를 기준으로 검토합니다. 국가 법령 기준은 자동으로 표시되고, 지자체 조례·공시지가는 필지별로 조회 버튼을 눌러 확인합니다.</p>
+        <p className="sheet-sub">01에서 입력한 필지를 기준으로 자동으로 검토합니다. 국가 법령 기준, 공시지가, 지자체 조례가 페이지 진입과 동시에 순서대로 조회되어 정리된 내용으로 표시됩니다.</p>
       </div>
 
       <div className="card">
@@ -488,9 +505,10 @@ function Page2({ parcels, onBack }) {
             <div className="subsection">
               <div className="subsection-head">
                 <span>최근 공시지가</span>
-                <button className="primary-btn small" onClick={() => lookupPrice(p)} disabled={!p.pnu || (pr && pr.loading)}>{pr && pr.loading ? "조회 중…" : "공시지가 조회"}</button>
+                <button className="primary-btn small" onClick={() => lookupPrice(p)} disabled={!p.pnu || (pr && pr.loading)}>{pr && pr.loading ? "조회 중…" : "다시 조회"}</button>
               </div>
               {!p.pnu && <p className="status-notfound">ⓘ 01에서 이 필지의 자동조회를 먼저 완료해야 PNU가 있어 조회할 수 있습니다.</p>}
+              {(!pr) && <p className="status-loading">🔄 자동으로 조회하는 중…</p>}
               {pr && pr.price && <p className="result-inline">{fmt(pr.price, 0)} 원/㎡ {pr.year && `(기준연도 ${pr.year})`}</p>}
               {pr && pr.kind === "notfound" && <p className="status-notfound">ⓘ {pr.note}</p>}
               {pr && pr.kind === "error" && <p className="status-error">⚠ {pr.note}</p>}
@@ -499,8 +517,9 @@ function Page2({ parcels, onBack }) {
             <div className="subsection">
               <div className="subsection-head">
                 <span>건폐율·용적률·창고시설 관련 조례</span>
-                <button className="primary-btn small" onClick={() => lookupOrdinance(p)} disabled={or_ && or_.loading}>{or_ && or_.loading ? "조회 중…" : "조례 조회"}</button>
+                <button className="primary-btn small" onClick={() => lookupOrdinance(p)} disabled={or_ && or_.loading}>{or_ && or_.loading ? "조회 중…" : "다시 조회"}</button>
               </div>
+              {(!or_) && <p className="status-loading">🔄 자동으로 조례를 검토하는 중…</p>}
               {or_ && or_.loading && <p className="status-loading">🔄 {or_.city} 도시계획 조례를 검색하는 중…</p>}
               {or_ && !or_.loading && or_.kind === "error" && <p className="status-error">⚠ {or_.note}</p>}
               {or_ && !or_.loading && or_.found === false && <p className="status-notfound">ⓘ {or_.reason}</p>}
