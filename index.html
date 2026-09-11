@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>물류창고 법규검토 — DUGA CNC</title>
+<title>물류창고 법규검토 — DUGA CNC (v2.2)</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -12,6 +12,12 @@
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
 const { useState } = React;
+
+// 배포 버전 표시 — 새 파일을 올릴 때마다 이 값을 바꾸면, 화면과 브라우저 탭
+// 제목에서 실제로 최신 버전이 반영됐는지 바로 확인할 수 있습니다.
+// 버전 규칙: MAJOR.MINOR — MAJOR는 새 페이지/큰 기능 추가 시, MINOR는 같은
+// 페이지 내 수정·버그픽스 시 올립니다. (예: 2.0=02페이지 추가, 2.1=수정1건)
+const APP_VERSION = "v2.2 (2026-09-11)";
 
 /* ------------------------------------------------------------------ */
 /*  API 설정                                                           */
@@ -335,7 +341,7 @@ function App() {
       <div className="topbar">
         <div className="brand">
           <div className="brand-mark">物流</div>
-          <div className="brand-text"><h1>물류창고 법규검토</h1><p>DUGA CNC — 사내 실무 도구 프로토타입</p></div>
+          <div className="brand-text"><h1>물류창고 법규검토</h1><p>DUGA CNC — 사내 실무 도구 프로토타입 · <span className="version-tag">{APP_VERSION}</span></p></div>
         </div>
       </div>
       <div className="stepper">
@@ -559,6 +565,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(<App />);
   .brand-mark { width:34px; height:34px; border:1.5px solid var(--ink); border-radius:3px; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px; flex-shrink:0; }
   .brand-text h1 { margin:0; font-size:16px; font-weight:700; }
   .brand-text p { margin:2px 0 0; font-size:12.5px; color:var(--ink-soft); }
+  .version-tag { font-family:"SFMono-Regular",Consolas,monospace; }
   .stepper { display:flex; justify-content:center; gap:6px; padding:18px 12px; max-width:860px; margin:0 auto; flex-wrap:wrap; }
   .step { display:flex; align-items:center; gap:6px; font-size:12.5px; padding:6px 10px; border-radius:20px; border:none; background:transparent; font-family:inherit; }
   .step.active { background:var(--ink); color:#fff; font-weight:600; }
