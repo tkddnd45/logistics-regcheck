@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>물류창고 법규검토 — DUGA CNC (v2.4)</title>
+<title>물류창고 법규검토 — DUGA CNC (v2.5)</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -17,7 +17,7 @@ const { useState, useEffect } = React;
 // 제목에서 실제로 최신 버전이 반영됐는지 바로 확인할 수 있습니다.
 // 버전 규칙: MAJOR.MINOR — MAJOR는 새 페이지/큰 기능 추가 시, MINOR는 같은
 // 페이지 내 수정·버그픽스 시 올립니다. (예: 2.0=02페이지 추가, 2.1=수정1건)
-const APP_VERSION = "v2.4 (2026-09-11)";
+const APP_VERSION = "v2.5 (2026-09-11)";
 
 /* ------------------------------------------------------------------ */
 /*  API 설정                                                           */
@@ -38,6 +38,28 @@ const ZONE_NAMES = [
   "준주거지역", "중심상업지역", "일반상업지역", "근린상업지역", "유통상업지역",
 ];
 function matchZoneName(text) { return text ? (ZONE_NAMES.find((n) => text.includes(n)) || null) : null; }
+// 용도지역별 건폐율·용적률 상한 (국토의 계획 및 이용에 관한 법률 시행령 제84조·제85조, 2026.7.1 시행 기준)
+const ZONE_LAW_LIMITS = {
+  "계획관리지역": { bcr: 40, farMin: 50, farMax: 100 },
+  "생산관리지역": { bcr: 20, farMin: 50, farMax: 80 },
+  "보전관리지역": { bcr: 20, farMin: 50, farMax: 80 },
+  "자연녹지지역": { bcr: 20, farMin: 50, farMax: 100 },
+  "전용공업지역": { bcr: 70, farMin: 150, farMax: 300 },
+  "일반공업지역": { bcr: 70, farMin: null, farMax: 350 },
+  "준공업지역": { bcr: 70, farMin: null, farMax: 400 },
+};
+function zoneWarehouseLawText(zoneName) {
+  if (zoneName === "계획관리지역") {
+    return {
+      text: "계획관리지역은 원칙적으로 창고시설 건축이 불가능하며, 지자체 조례가 허용 목록에서 제외해야 건축이 가능합니다.",
+      article: "국토의 계획 및 이용에 관한 법률 시행령 제71조제1항제19호·별표20 제1호 (2026.7.1 시행 기준)",
+    };
+  }
+  return {
+    text: "이 용도지역의 창고시설 허용 여부는 국토계획법 시행령 별표(용도지역안에서의 건축제한)를 별도로 확인해야 합니다.",
+    article: "국토의 계획 및 이용에 관한 법률 시행령 제71조제1항제19호 관련 별표",
+  };
+}
 function fmt(n, digits = 1) {
   if (n === null || n === undefined || Number.isNaN(n)) return "-";
   return Number(n).toLocaleString("ko-KR", { maximumFractionDigits: digits });
@@ -250,6 +272,32 @@ async function fetchOrdinanceKeywordHits(cityName, keywords) {
   return { found: true, ordinName, mst, hits, debug };
 }
 
+// 검색된 조례 조문을 Claude가 읽고 창고시설 허용여부·건폐율·용적률 조례값을
+// 구조화된 형태로 판단한다. 문구를 읽고 해석하는 부분이라 화면에는 "AI 해석"으로 표시된다.
+async function interpretOrdinanceWithAI(zoneName, hits) {
+  const hitsText = (hits || []).map((h) => `[${h.title || "(제목 없음)"}]\n${h.text}`).join("\n\n");
+  const prompt = `다음은 어느 지자체 도시계획 조례에서 "창고", "건폐율", "용적률", "주차" 키워드로 검색된 조문 원문이다. 이 필지의 용도지역은 "${zoneName || "확인 안 됨"}"이다.
+
+${hitsText || "(검색된 조문 없음)"}
+
+위 원문만 근거로 삼아 판단하고, 원문에 없는 내용은 절대 추정하지 마. 다른 설명 없이 아래 JSON 형식으로만 답변해:
+{"warehouseAllowed": "가능" 또는 "불가능" 또는 "확인 필요", "warehouseReason": "판단 근거를 한두 문장으로", "warehouseArticle": "관련 조문번호(예: 제23조) 또는 null", "bcrPercent": 건폐율_숫자_퍼센트_또는_null, "bcrArticle": "관련 조문번호 또는 null", "farPercent": 용적률_숫자_퍼센트_또는_null, "farArticle": "관련 조문번호 또는 null"}`;
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6", max_tokens: 1000,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!response.ok) throw new Error(`API 요청 실패 (${response.status})`);
+  const data = await response.json();
+  const textBlocks = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+  const match = textBlocks.replace(/```json|```/g, "").match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("응답 형식을 해석하지 못했습니다.");
+  return JSON.parse(match[0]);
+}
+
 const STEPS = [
   { num: "01", label: "지번 입력" },
   { num: "02", label: "지번별 법규 검토" },
@@ -424,10 +472,48 @@ function Page1({ parcels, addParcel, removeParcel, updateLot, status, debugOpen,
   );
 }
 
+function Topic({ title, lawText, lawArticle, ordinRow, ordinLoading, ordinText, ordinArticle, ordinName, conclusion, conclusionTone, aiInterpreted, sourceKey, sourceOpen, setSourceOpen, hits }) {
+  const relevantHit = hits && ordinArticle ? hits.find((h) => h.title && h.title.includes(ordinArticle)) : null;
+  return (
+    <div className="topic">
+      <div className="topic-title">{title}</div>
+      <div className="topic-row">
+        <span className="topic-label">상위법령</span>
+        <span className="topic-value">{lawText}</span>
+      </div>
+      {lawArticle && <p className="topic-source">{lawArticle}</p>}
+      {ordinRow && (
+        <>
+          <div className="topic-row" style={{ marginTop: 6 }}>
+            <span className="topic-label">조례</span>
+            <span className="topic-value">{ordinLoading ? "조회 중…" : (ordinText || "대기 중")}</span>
+          </div>
+          {!ordinLoading && ordinName && ordinArticle && <p className="topic-source">{ordinName} {ordinArticle}</p>}
+        </>
+      )}
+      {conclusion && (
+        <div className="conclusion-row">
+          <div className={`conclusion ${conclusionTone || "accent"}`}>{conclusion}</div>
+          {aiInterpreted && <span className="ai-badge">AI 해석</span>}
+        </div>
+      )}
+      {aiInterpreted && relevantHit && (
+        <>
+          <button className="link-btn" onClick={() => setSourceOpen((s) => ({ ...s, [sourceKey]: !s[sourceKey] }))}>
+            {sourceOpen[sourceKey] ? `${ordinArticle} 원문 닫기` : `${ordinArticle} 원문 보기`}
+          </button>
+          {sourceOpen[sourceKey] && <div className="source-box">{relevantHit.text}</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
 function Page2({ parcels, onBack }) {
   const [priceStatus, setPriceStatus] = useState({});
-  const [ordinStatus, setOrdinStatus] = useState({});
-  const [ordinDebugOpen, setOrdinDebugOpen] = useState({});
+  const [reviewStatus, setReviewStatus] = useState({});
+  const [sourceOpen, setSourceOpen] = useState({});
+  const [debugOpen, setDebugOpen] = useState({});
 
   async function lookupPrice(p) {
     if (!p.pnu) return;
@@ -450,21 +536,25 @@ function Page2({ parcels, onBack }) {
     }
   }
 
-  async function lookupOrdinance(p) {
-    // 브이월드 지오코딩이 확인해준 시·군 이름을 우선 쓰고, 없을 때만 입력 텍스트에서 추정한다.
+  async function runReview(p) {
     const city = p.cityName || extractCityName(p.lot);
-    if (!city) { setOrdinStatus((s) => ({ ...s, [p.id]: { kind: "error", note: "시·군을 확인하지 못했습니다. 01에서 자동조회를 먼저 완료해주세요." } })); return; }
-    setOrdinStatus((s) => ({ ...s, [p.id]: { loading: true, city } }));
+    if (!city) { setReviewStatus((s) => ({ ...s, [p.id]: { kind: "error", note: "시·군을 확인하지 못했습니다. 01에서 자동조회를 먼저 완료해주세요." } })); return; }
+    setReviewStatus((s) => ({ ...s, [p.id]: { loading: true, city } }));
     try {
-      const r = await fetchOrdinanceKeywordHits(city, ["창고", "건폐율", "용적률", "주차"]);
-      setOrdinStatus((s) => ({ ...s, [p.id]: { city, ...r } }));
+      const search = await fetchOrdinanceKeywordHits(city, ["창고", "건폐율", "용적률", "주차"]);
+      if (!search.found) { setReviewStatus((s) => ({ ...s, [p.id]: { city, kind: "notfound", note: search.reason, debug: search.debug } })); return; }
+      try {
+        const interpretation = await interpretOrdinanceWithAI(p.zoneName, search.hits);
+        setReviewStatus((s) => ({ ...s, [p.id]: { city, ordinName: search.ordinName, hits: search.hits, interpretation, debug: search.debug } }));
+      } catch (e) {
+        setReviewStatus((s) => ({ ...s, [p.id]: { city, ordinName: search.ordinName, hits: search.hits, kind: "error", note: "조례 문구를 해석하는 중 오류가 발생했습니다.", debug: search.debug } }));
+      }
     } catch (e) {
-      setOrdinStatus((s) => ({ ...s, [p.id]: { city, kind: "error", note: "조례 API 호출 중 오류가 발생했습니다 (CORS 또는 네트워크 문제일 수 있습니다).", debug: { error: String(e) } } }));
+      setReviewStatus((s) => ({ ...s, [p.id]: { city, kind: "error", note: "조례 API 호출 중 오류가 발생했습니다 (CORS 또는 네트워크 문제일 수 있습니다).", debug: { error: String(e) } } }));
     }
   }
 
   // 02 페이지에 들어오면 각 필지의 공시지가·조례를 자동으로 순서대로 조회한다.
-  // (버튼은 실패했을 때 재조회용으로 남겨둔다.)
   useEffect(() => {
     let cancelled = false;
     async function runAll() {
@@ -472,7 +562,7 @@ function Page2({ parcels, onBack }) {
         if (cancelled) return;
         await lookupPrice(p);
         if (cancelled) return;
-        await lookupOrdinance(p);
+        await runReview(p);
       }
     }
     runAll();
@@ -484,63 +574,102 @@ function Page2({ parcels, onBack }) {
     <div>
       <div className="sheet-header">
         <h2 className="sheet-title">지번별 법규 검토</h2>
-        <p className="sheet-sub">01에서 입력한 필지를 기준으로 자동으로 검토합니다. 국가 법령 기준, 공시지가, 지자체 조례가 페이지 진입과 동시에 순서대로 조회되어 정리된 내용으로 표시됩니다.</p>
-      </div>
-
-      <div className="card">
-        <h3>국가 법령 기준 (전국 공통)</h3>
-        <div className="law-item"><b>층수·높이제한</b><p>일조권 사선제한(정북방향 높이제한)은 전용주거·일반주거지역에만 적용됩니다. 계획관리지역·공업지역 등에는 해당 없음이 원칙입니다. 가로구역별 높이제한은 지자체가 별도 지정한 경우에만 있어 개별 확인이 필요합니다.</p><p className="source-note">출처: 건축법 제60조·제61조</p></div>
-        <div className="law-item"><b>건축선 규정</b><p>원칙적으로 대지와 도로의 경계선이 건축선입니다. 접한 도로 폭이 4m 미만이면 도로 중심선에서 소요너비의 1/2만큼 후퇴한 선이 건축선이 됩니다.</p><p className="source-note">출처: 건축법 제46조, 시행령 제31조</p></div>
-        <div className="law-item"><b>도로조건 규제사항</b><p>대지는 원칙적으로 2m 이상 도로에 접해야 합니다. 연면적 합계 2,000㎡ 이상인 건축물(창고시설 포함, 공장은 3,000㎡ 기준 별도 적용)은 너비 6m 이상 도로에 4m 이상 접해야 합니다.</p><p className="source-note">출처: 건축법 제44조, 시행령 제28조</p></div>
-        <div className="law-item review"><b>창고시설 행위가능여부 <span className="badge review">조례 확인 필요</span></b><p>계획관리지역에서 일반 창고시설은 국가 시행령상 원칙적으로 "건축할 수 없는 건축물"에 해당하며, 지자체 도시계획조례가 이를 허용 목록에서 별도로 제외해야 건축이 가능합니다. 즉 이 항목은 국가 법령만으로는 판단할 수 없고, 반드시 해당 지자체 조례를 확인해야 합니다.</p><p className="source-note">출처: 국토의 계획 및 이용에 관한 법률 시행령 제71조제1항제19호·별표20</p></div>
+        <p className="sheet-sub">01에서 입력한 필지를 상위법령부터 지자체 조례까지 자동으로 검토해 항목별로 정리합니다.</p>
       </div>
 
       {parcels.map((p) => {
         const pr = priceStatus[p.id];
-        const or_ = ordinStatus[p.id];
+        const rv = reviewStatus[p.id];
+        const interp = rv && rv.interpretation;
+        const zoneLimits = ZONE_LAW_LIMITS[p.zoneName] || null;
+        const wh = zoneWarehouseLawText(p.zoneName);
         return (
           <div className="card" key={p.id}>
             <h3>{p.lot || "(지번 미입력)"} <span className="badge review">{p.zoneName || "용도지역 미확인"}</span></h3>
+            <p className="parcel-sub">대지면적 {p.area ? fmt(p.area, 0) + "㎡" : "-"}</p>
 
-            <div className="subsection">
-              <div className="subsection-head">
-                <span>최근 공시지가</span>
-                <button className="primary-btn small" onClick={() => lookupPrice(p)} disabled={!p.pnu || (pr && pr.loading)}>{pr && pr.loading ? "조회 중…" : "다시 조회"}</button>
-              </div>
+            <Topic
+              title="창고시설 행위가능여부"
+              lawText={wh.text} lawArticle={wh.article}
+              ordinRow={true} ordinLoading={rv && rv.loading}
+              ordinText={interp ? interp.warehouseReason : (rv && !rv.loading ? (rv.note || null) : null)}
+              ordinArticle={interp ? interp.warehouseArticle : null}
+              ordinName={rv && rv.ordinName}
+              conclusion={interp ? interp.warehouseAllowed : null}
+              conclusionTone={interp ? (interp.warehouseAllowed === "가능" ? "success" : interp.warehouseAllowed === "불가능" ? "danger" : "warning") : "warning"}
+              aiInterpreted={true} sourceKey={"wh-" + p.id} sourceOpen={sourceOpen} setSourceOpen={setSourceOpen} hits={rv && rv.hits}
+            />
+
+            <Topic
+              title="건폐율"
+              lawText={zoneLimits ? `${zoneLimits.bcr}% 이하 (상한)` : "용도지역 확인 후 표시됩니다"}
+              lawArticle="국토의 계획 및 이용에 관한 법률 시행령 제84조제1항 (2026.7.1 시행 기준)"
+              ordinRow={true} ordinLoading={rv && rv.loading}
+              ordinText={interp ? (interp.bcrPercent ? `${interp.bcrPercent}%로 지정` : "조례에서 별도 수치를 찾지 못함") : (rv && !rv.loading ? (rv.note || null) : null)}
+              ordinArticle={interp ? interp.bcrArticle : null}
+              ordinName={rv && rv.ordinName}
+              conclusion={interp && interp.bcrPercent ? `적용 기준 — ${interp.bcrPercent}%` : (zoneLimits ? `시행령 상한 — ${zoneLimits.bcr}% (조례 확인 필요)` : null)}
+              conclusionTone={interp && interp.bcrPercent ? "accent" : "warning"}
+              aiInterpreted={false} sourceKey={"bcr-" + p.id} sourceOpen={sourceOpen} setSourceOpen={setSourceOpen} hits={rv && rv.hits}
+            />
+
+            <Topic
+              title="용적률"
+              lawText={zoneLimits ? `${zoneLimits.farMin ? zoneLimits.farMin + "~" : ""}${zoneLimits.farMax}% (범위)` : "용도지역 확인 후 표시됩니다"}
+              lawArticle="국토의 계획 및 이용에 관한 법률 시행령 제85조제1항 (2026.7.1 시행 기준)"
+              ordinRow={true} ordinLoading={rv && rv.loading}
+              ordinText={interp ? (interp.farPercent ? `${interp.farPercent}%로 지정` : "조례에서 별도 수치를 찾지 못함") : (rv && !rv.loading ? (rv.note || null) : null)}
+              ordinArticle={interp ? interp.farArticle : null}
+              ordinName={rv && rv.ordinName}
+              conclusion={interp && interp.farPercent ? `적용 기준 — ${interp.farPercent}%` : (zoneLimits ? `시행령 상한 — ${zoneLimits.farMax}% (조례 확인 필요)` : null)}
+              conclusionTone={interp && interp.farPercent ? "accent" : "warning"}
+              aiInterpreted={false} sourceKey={"far-" + p.id} sourceOpen={sourceOpen} setSourceOpen={setSourceOpen} hits={rv && rv.hits}
+            />
+
+            <Topic
+              title="층수·높이제한"
+              lawText="일조권 사선제한(정북방향 높이제한)은 전용주거·일반주거지역에만 적용됩니다. 이 용도지역은 해당 없음이 원칙입니다."
+              lawArticle="건축법 제60조·제61조"
+              conclusion="가로구역별 높이제한은 지자체가 별도 지정한 경우에만 있어 관할 구청 확인이 필요합니다"
+              conclusionTone="warning"
+            />
+
+            <Topic
+              title="건축선 규정"
+              lawText="원칙적으로 대지와 도로의 경계선이 건축선입니다. 접한 도로 폭이 4m 미만이면 도로 중심선에서 소요너비의 1/2만큼 후퇴한 선이 건축선이 됩니다."
+              lawArticle="건축법 제46조, 시행령 제31조"
+              conclusion="접한 도로의 실제 폭을 현장에서 확인해야 정확한 건축선을 알 수 있습니다"
+              conclusionTone="accent"
+            />
+
+            <Topic
+              title="도로조건 규제사항"
+              lawText="대지는 원칙적으로 2m 이상 도로에 접해야 합니다. 연면적 합계 2,000㎡ 이상인 건축물(창고시설 포함)은 너비 6m 이상 도로에 4m 이상 접해야 합니다."
+              lawArticle="건축법 제44조, 시행령 제28조"
+              conclusion="접한 도로 폭이 6m 이상인지 현장 확인이 필요합니다"
+              conclusionTone="warning"
+            />
+
+            <div className="topic">
+              <div className="topic-title">최근 공시지가</div>
               {!p.pnu && <p className="status-notfound">ⓘ 01에서 이 필지의 자동조회를 먼저 완료해야 PNU가 있어 조회할 수 있습니다.</p>}
-              {(!pr) && <p className="status-loading">🔄 자동으로 조회하는 중…</p>}
-              {pr && pr.price && <p className="result-inline">{fmt(pr.price, 0)} 원/㎡ {pr.year && `(기준연도 ${pr.year})`}</p>}
+              {!pr && p.pnu && <p className="status-loading">🔄 자동으로 조회하는 중…</p>}
+              {pr && pr.price && (
+                <>
+                  <div className="conclusion accent">{fmt(pr.price, 0)} 원/㎡</div>
+                  <p className="topic-source">브이월드 개별공시지가속성조회 API (기준연도 {pr.year})</p>
+                </>
+              )}
               {pr && pr.kind === "notfound" && <p className="status-notfound">ⓘ {pr.note}</p>}
               {pr && pr.kind === "error" && <p className="status-error">⚠ {pr.note}</p>}
             </div>
 
-            <div className="subsection">
-              <div className="subsection-head">
-                <span>건폐율·용적률·창고시설 관련 조례</span>
-                <button className="primary-btn small" onClick={() => lookupOrdinance(p)} disabled={or_ && or_.loading}>{or_ && or_.loading ? "조회 중…" : "다시 조회"}</button>
-              </div>
-              {(!or_) && <p className="status-loading">🔄 자동으로 조례를 검토하는 중…</p>}
-              {or_ && or_.loading && <p className="status-loading">🔄 {or_.city} 도시계획 조례를 검색하는 중…</p>}
-              {or_ && !or_.loading && or_.kind === "error" && <p className="status-error">⚠ {or_.note}</p>}
-              {or_ && !or_.loading && or_.found === false && <p className="status-notfound">ⓘ {or_.reason}</p>}
-              {or_ && !or_.loading && or_.found && or_.hits && or_.hits.length === 0 && (
-                <p className="status-notfound">ⓘ "{or_.ordinName}"에서 창고·건폐율·용적률·주차 관련 조문을 찾지 못했습니다. 별표(첨부 서식)에 있을 가능성이 있어 원본 조례를 직접 확인해주세요.</p>
-              )}
-              {or_ && !or_.loading && or_.found && or_.hits && or_.hits.length > 0 && (
-                <div>
-                  <p className="source-note">출처: {or_.ordinName}</p>
-                  {or_.hits.map((h, i) => (
-                    <div className="ordin-hit" key={i}>
-                      <b>{h.title}</b>
-                      <p>{h.text}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {or_ && or_.debug && !or_.loading && (
+            <div className="topic-footer">
+              <button className="link-btn" onClick={() => runReview(p)} disabled={rv && rv.loading}>{rv && rv.loading ? "조례 재검토 중…" : "조례 다시 검토"}</button>
+              {rv && rv.debug && (
                 <>
-                  <button className="link-btn" onClick={() => setOrdinDebugOpen((d) => ({ ...d, [p.id]: !d[p.id] }))}>{ordinDebugOpen[p.id] ? "원본 응답 닫기" : "원본 응답 보기"}</button>
-                  {ordinDebugOpen[p.id] && <pre className="debug-pre">{JSON.stringify(or_.debug, null, 2)}</pre>}
+                  <button className="link-btn" onClick={() => setDebugOpen((d) => ({ ...d, [p.id]: !d[p.id] }))}>{debugOpen[p.id] ? "원본 응답 닫기" : "원본 응답 보기"}</button>
+                  {debugOpen[p.id] && <pre className="debug-pre">{JSON.stringify(rv.debug, null, 2)}</pre>}
                 </>
               )}
             </div>
@@ -630,6 +759,22 @@ ReactDOM.createRoot(document.getElementById("root")).render(<App />);
   .ordin-hit { background:#F6F7F6; border-radius:5px; padding:10px 12px; margin-top:8px; font-size:13px; }
   .ordin-hit b { display:block; margin-bottom:4px; }
   .ordin-hit p { margin:0; color:var(--ink-soft); white-space:pre-wrap; }
+  .parcel-sub { font-size:13px; color:var(--ink-soft); margin:-8px 0 14px; }
+  .topic { border-top:1px solid var(--line); padding:14px 0; }
+  .topic-title { font-size:14px; font-weight:700; margin-bottom:8px; }
+  .topic-row { display:grid; grid-template-columns:70px 1fr; gap:2px 10px; font-size:13px; }
+  .topic-label { color:var(--ink-soft); }
+  .topic-value { color:var(--ink); }
+  .topic-source { font-size:11.5px; color:var(--ink-soft); margin:2px 0 0 80px; }
+  .conclusion-row { display:flex; align-items:center; gap:8px; margin-top:10px; }
+  .conclusion { font-size:13px; padding:8px 12px; border-radius:5px; flex:1; }
+  .conclusion.success { background:rgba(31,111,61,.10); color:#1F6F3D; }
+  .conclusion.danger { background:rgba(162,58,46,.10); color:#A23A2E; }
+  .conclusion.warning { background:rgba(156,100,20,.12); color:#9C6414; }
+  .conclusion.accent { background:var(--accent-soft); color:var(--accent); }
+  .ai-badge { background:#EEEDFE; color:#3C3489; font-size:11px; font-weight:600; padding:3px 8px; border-radius:5px; white-space:nowrap; }
+  .source-box { margin-top:8px; background:#F6F7F6; border-radius:5px; padding:10px 12px; font-size:12.5px; color:var(--ink-soft); line-height:1.7; white-space:pre-wrap; }
+  .topic-footer { display:flex; align-items:center; gap:6px; margin-top:14px; padding-top:14px; border-top:1px solid var(--line); flex-wrap:wrap; }
   @media (max-width:640px) {
     .parcel-table, .parcel-table thead, .parcel-table tbody, .parcel-table th, .parcel-table td, .parcel-table tr { display:block; }
     .parcel-table thead { display:none; }
