@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>물류창고 법규검토 — DUGA CNC (v2.2)</title>
+<title>물류창고 법규검토 — DUGA CNC (v2.3)</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -17,7 +17,7 @@ const { useState } = React;
 // 제목에서 실제로 최신 버전이 반영됐는지 바로 확인할 수 있습니다.
 // 버전 규칙: MAJOR.MINOR — MAJOR는 새 페이지/큰 기능 추가 시, MINOR는 같은
 // 페이지 내 수정·버그픽스 시 올립니다. (예: 2.0=02페이지 추가, 2.1=수정1건)
-const APP_VERSION = "v2.2 (2026-09-11)";
+const APP_VERSION = "v2.3 (2026-09-11)";
 
 /* ------------------------------------------------------------------ */
 /*  API 설정                                                           */
@@ -189,36 +189,25 @@ async function lawServiceOrdin(mst) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
-// 응답 JSON 구조가 불확실하므로, 객체를 재귀적으로 훑어 자치법규명이 들어있는
-// 항목과 조문 배열을 최대한 유연하게 찾아낸다.
-function deepFindArrays(obj, out) {
+// 응답 JSON 구조가 불확실한 데다, 검색결과가 1건이면 배열이 아니라 단일
+// 객체로 오는 경우가 있어(브이월드류 정부 API에서 흔함), 배열/단일객체 모두
+// 재귀적으로 훑어서 해당 필드를 가진 객체를 직접 찾아낸다.
+function deepFindByField(obj, fieldIncludes, matchFn, out) {
   if (!obj || typeof obj !== "object") return;
-  if (Array.isArray(obj)) { out.push(obj); obj.forEach((it) => deepFindArrays(it, out)); return; }
-  Object.values(obj).forEach((v) => deepFindArrays(v, out));
+  if (Array.isArray(obj)) { obj.forEach((it) => deepFindByField(it, fieldIncludes, matchFn, out)); return; }
+  const entry = Object.entries(obj).find(([k]) => fieldIncludes.some((f) => k.includes(f)));
+  if (entry && matchFn(entry[1])) out.push(obj);
+  Object.values(obj).forEach((v) => deepFindByField(v, fieldIncludes, matchFn, out));
 }
 function findOrdinCandidates(searchJson, keyword) {
-  const arrays = [];
-  deepFindArrays(searchJson, arrays);
-  const items = [];
-  arrays.forEach((arr) => arr.forEach((it) => {
-    if (it && typeof it === "object") {
-      const name = Object.entries(it).find(([k, v]) => k.includes("자치법규명") || k === "법령명한글");
-      if (name && typeof name[1] === "string" && name[1].includes(keyword)) items.push(it);
-    }
-  }));
-  return items;
+  const out = [];
+  deepFindByField(searchJson, ["자치법규명"], (v) => typeof v === "string" && v.includes(keyword), out);
+  return out;
 }
 function findJoArray(serviceJson) {
-  const arrays = [];
-  deepFindArrays(serviceJson, arrays);
-  // "조내용" 또는 "조문내용" 필드를 가진 항목들이 들어있는 배열을 조문 배열로 간주
-  let best = null, bestScore = 0;
-  arrays.forEach((arr) => {
-    const score = arr.filter((it) => it && typeof it === "object"
-      && Object.keys(it).some((k) => k.includes("조내용") || k.includes("조문내용"))).length;
-    if (score > bestScore) { bestScore = score; best = arr; }
-  });
-  return best || [];
+  const out = [];
+  deepFindByField(serviceJson, ["조내용", "조문내용"], () => true, out);
+  return out;
 }
 function joText(item) {
   const entry = Object.entries(item).find(([k]) => k.includes("조내용") || k.includes("조문내용"));
