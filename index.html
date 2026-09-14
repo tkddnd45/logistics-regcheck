@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>물류창고 법규검토 — DUGA CNC (v2.7)</title>
+<title>물류창고 법규검토 — DUGA CNC (v2.8)</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -17,7 +17,7 @@ const { useState, useEffect } = React;
 // 제목에서 실제로 최신 버전이 반영됐는지 바로 확인할 수 있습니다.
 // 버전 규칙: MAJOR.MINOR — MAJOR는 새 페이지/큰 기능 추가 시, MINOR는 같은
 // 페이지 내 수정·버그픽스 시 올립니다. (예: 2.0=02페이지 추가, 2.1=수정1건)
-const APP_VERSION = "v2.7 (2026-09-11)";
+const APP_VERSION = "v2.8 (2026-09-14)";
 
 /* ------------------------------------------------------------------ */
 /*  API 설정                                                           */
@@ -274,7 +274,7 @@ async function fetchOrdinanceKeywordHits(cityName, keywords) {
       const score = (h) => keywords.reduce((s, k) => s + (h.title.includes(k) ? 2 : 0) + (h.text.includes(k) ? 1 : 0), 0);
       return score(b) - score(a);
     })
-    .slice(0, 8);
+    .slice(0, 5);
 
   return { found: true, ordinName, mst, hits, debug };
 }
@@ -282,7 +282,9 @@ async function fetchOrdinanceKeywordHits(cityName, keywords) {
 // 검색된 조례 조문을 Claude가 읽고 창고시설 허용여부·건폐율·용적률 조례값을
 // 구조화된 형태로 판단한다. 문구를 읽고 해석하는 부분이라 화면에는 "AI 해석"으로 표시된다.
 async function interpretOrdinanceWithAI(zoneName, hits) {
-  const hitsText = (hits || []).map((h) => `[${h.title || "(제목 없음)"}]\n${h.text}`).join("\n\n");
+  // 조문 하나가 매우 길 수 있어(2천자 이상인 경우도 있음), 요청 크기를 줄이기 위해
+  // 조문당 700자로 잘라서 보낸다.
+  const hitsText = (hits || []).map((h) => `[${h.title || "(제목 없음)"}]\n${(h.text || "").slice(0, 700)}`).join("\n\n");
   const prompt = `다음은 어느 지자체 도시계획 조례에서 "창고", "건폐율", "용적률", "주차" 키워드로 검색된 조문 원문이다. 이 필지의 용도지역은 "${zoneName || "확인 안 됨"}"이다.
 
 ${hitsText || "(검색된 조문 없음)"}
